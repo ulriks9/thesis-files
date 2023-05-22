@@ -11,6 +11,7 @@ from multiprocessing.dummy import Pool as ThreadPool
 from multiprocessing import cpu_count
 from librosa.feature import melspectrogram
 from librosa import to_mono
+from concurrent.futures import ThreadPoolExecutor
 
 BASE_PATH = "data/"
 SUB_FOLDER_PATH = "data/fma/"
@@ -28,26 +29,32 @@ parser.add_argument("--hop_length", default=2585, required=False)
 parser.add_argument("--n_mels", default=256, required=False)
 parser.add_argument("--length", default=512, required=False)
 parser.add_argument("--download", default=False, required=False)
+parser.add_argument("--num_threads", default=int(cpu_count() / 1.5), required=False)
 
 args = parser.parse_args()
 
-def threaded_fn(genre):
+# Convert MP3s in the directory for the genre:
+def convert(genre):
     files = os.listdir(f"{SUB_FOLDER_PATH}genres/{genre}/")
 
+    # Create directories:
     if not os.path.exists("data/fma/spectrograms/"):
         os.mkdir("data/fma/spectrograms/")
     if not os.path.exists(f"data/fma/spectrograms/{genre}/"):
         os.mkdir(f"data/fma/spectrograms/{genre}/")
 
+    # Convert files to Mel Spectrograms:
     for file in tqdm(files, total=len(files), desc=f"{genre}", leave=False):
         try:
             signal, sr = audiofile.read(f"{SUB_FOLDER_PATH}genres/{genre}/{file}")
-            signal = to_mono(signal)
         except RuntimeError:
             print("\nInvalid MP3 File\n")
             continue
         if sr != 44100:
             continue
+
+        # Compute Mel Spectrogram:
+        signal = to_mono(signal)
         spectrogram = melspectrogram(
             y=np.array(signal), 
             sr=sr, 
@@ -91,23 +98,24 @@ def main():
         response = requests.get(DATASET_LINK, stream=True)
         data_name = "data.zip"
         
-        if not os.path.exists(data_name):
-            with open(data_name, "wb") as handle:
-                for data in tqdm(response.iter_content(chunk_size=1024*1024), desc="Downloading dataset", unit="MB"):
-                    handle.write(data)
-        
         if not os.path.exists(SUB_FOLDER_PATH):
+            if not os.path.exists(data_name):
+                with open(data_name, "wb") as handle:
+                    for data in tqdm(response.iter_content(chunk_size=1024*1024), desc="Downloading dataset", unit="MB"):
+                        handle.write(data)
+
             print("INFO: Unzipping dataset")
             with zipfile.ZipFile(data_name, "r") as zip_ref:
-                zip_ref.extractall(BASE_PATH)
+                with ThreadPoolExecutor(int(args.num_threads)) as exe:
+                    for m in zip_ref.namelist():
+                        exe.submit(zip_ref.extract, m, BASE_PATH)
 
             os.rename(BASE_PATH + "fma_medium", BASE_PATH + "fma")
 
         # Download metadata:
-        response = requests.get(METADATA_LINK, stream=True)
         metadata_name = "metadata.zip"
-
         if not os.path.exists(metadata_name):
+            response = requests.get(METADATA_LINK, stream=True)
             with open(metadata_name, "wb") as handle:
                 for data in tqdm(response.iter_content(chunk_size=1024*1024), desc="Downloading metadata", unit="MB"):
                     handle.write(data)
@@ -120,10 +128,10 @@ def main():
             os.rename(BASE_PATH + "fma_metadata", SUB_FOLDER_PATH + "fma_metadata")
 
         # Remove leftover files:
-        if os.path.exists("data.zip"):
-            os.remove("data.zip")
-        if os.path.exists("metadata.zip"):
-            os.remove("metadata.zip")
+        if os.path.exists(data_name):
+            os.remove(data_name)
+        if os.path.exists(metadata_name):
+            os.remove(metadata_name)
         if os.path.exists("data/fma_medium/"):
             shutil.rmtree("data/fma_medium/")
 
@@ -168,27 +176,33 @@ def main():
     # Move files to correct folders:
     sub_folders = os.listdir(SUB_FOLDER_PATH)
     for folder in tqdm(sub_folders, total=len(sub_folders), desc="Folders moved"):
-        try:
-            files = os.listdir(SUB_FOLDER_PATH + folder + "/")
-        except:
-            print("Operation finished")
-            break
-
+        if os.path.isdir(f"{SUB_FOLDER_PATH}{folder}"):
+            files = os.listdir(f"{SUB_FOLDER_PATH}{folder}")
+        else:
+            continue
+        
+        # Check if directory is empty:
         if len(files) == 0:
             print("No files found in original location")
             break
 
+        # Ignore genre and metadata folders:
+        if folder in "genres" or folder in "fma_metadata":
+            continue
+
+        # Move files to correct directory:
         for file in files:
             track_id = int(file.split(".")[0])
             row = metadata[metadata["track_id"] == str(track_id)]
             genre = str(row["genre"].values[0])
+
             os.rename(SUB_FOLDER_PATH + folder + "/" + file, SUB_FOLDER_PATH + "genres/" + genre + "/" + file)
 
     # Convert audio to spectrograms:
     print("INFO: Generating spectrograms")
 
-    pool = ThreadPool(cpu_count() - 2)
-    pool.map(threaded_fn, unique_genres)
+    pool = ThreadPool(int(args.num_threads))
+    pool.map(convert, unique_genres)
 
     print("INFO: Processing complete")
 
