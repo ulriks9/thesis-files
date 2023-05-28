@@ -24,18 +24,23 @@ parser = argparse.ArgumentParser(
     prog="1D DDPM Data Processing Script"
 )
 
-parser.add_argument("--n_fft", default=4096, required=False)
-parser.add_argument("--hop_length", default=2585, required=False)
-parser.add_argument("--n_mels", default=256, required=False)
-parser.add_argument("--length", default=512, required=False)
-parser.add_argument("--download", default=False, required=False)
-parser.add_argument("--num_threads", default=int(cpu_count() / 1.5), required=False)
+parser.add_argument("--n_fft", default=4096, required=False, type=int)
+parser.add_argument("--hop_length", default=2585, required=False, type=int)
+parser.add_argument("--n_mels", default=256, required=False, type=int)
+parser.add_argument("--length", default=512, required=False, type=int)
+parser.add_argument("--download", default='False', required=False, type=str)
+parser.add_argument("--num_threads", default=int(cpu_count() / 1.5), required=False, type=int)
 
 args = parser.parse_args()
 
 # Convert MP3s in the directory for the genre:
 def convert(genre):
     files = os.listdir(f"{SUB_FOLDER_PATH}genres/{genre}/")
+
+    if args.download in 'True':
+        args.download = True
+    else:
+        args.download = False
 
     # Create directories:
     if not os.path.exists("data/fma/spectrograms/"):
@@ -65,8 +70,10 @@ def convert(genre):
             ).squeeze()
         
         # Remove occasional extra dim:
-        if spectrogram.shape[-1] == args.length:
-            np.save(f'data/fma/spectrograms/{genre}/{file.split(".")[0]}.npy', spectrogram)
+        if spectrogram.shape[-1] > args.length:
+            np.save(f'data/fma/spectrograms/{genre}/{file.split(".")[0]}.npy', spectrogram[:,args.length])
+
+        np.save(f'data/fma/spectrograms/{genre}/{file.split(".")[0]}.npy', spectrogram)
 
 # Clean up genres column:
 def clean_genres(x):
