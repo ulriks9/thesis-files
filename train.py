@@ -26,7 +26,7 @@ parser.add_argument('--l_r', default=1e-4, required=False, type=float)
 parser.add_argument('--eps', default=1e-6, required=False, type=float)
 parser.add_argument('--weight_decay', default=1e-3, required=False, type=float)
 parser.add_argument('--num_workers', default=cpu_count() - 2, required=False, type=int)
-parser.add_argument('--dims', default="256,256,512,512,1024,1024", required=False, type=str)
+parser.add_argument('--dims', default="64,128,256,512,1024", required=False, type=str)
 parser.add_argument('--scheduler', default="ReduceLROnPlateau", required=False, type=str)
 parser.add_argument('--patience', default=10, required=False, type=int)
 parser.add_argument('--scheduler_threshold', default=1e-2, required=False, type=int)
@@ -55,6 +55,7 @@ def main():
     device = args.device
     args.dims = str(args.dims).split(',')
     args.dims = [int(dim) for dim in args.dims]
+    
     dataset = FMA(workers=args.num_workers, normalize=NORMALIZE)
     example = next(iter(dataset))
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, pin_memory=True)
