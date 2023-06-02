@@ -19,17 +19,18 @@ METADATA_PATH = "data/fma/fma_metadata/tracks.csv"
 GENRES_PATH = "data/fma/fma_metadata/genres.csv"
 DATASET_LINK = "https://os.unil.cloud.switch.ch/fma/fma_medium.zip"
 METADATA_LINK = "https://os.unil.cloud.switch.ch/fma/fma_metadata.zip"
+MEMMAP_PATH = "data/fma/memmap.dat"
 
 parser = argparse.ArgumentParser(
     prog="1D DDPM Data Processing Script"
 )
 
-parser.add_argument("--n_fft", default=4096, required=False, type=int)
-parser.add_argument("--hop_length", default=2585, required=False, type=int)
-parser.add_argument("--n_mels", default=256, required=False, type=int)
-parser.add_argument("--length", default=512, required=False, type=int)
+parser.add_argument("--n_fft", default=2048, required=False, type=int)
+parser.add_argument("--n_mels", default=64, required=False, type=int)
+parser.add_argument("--length", default=128, required=False, type=int)
 parser.add_argument("--download", default='False', required=False, type=str)
-parser.add_argument("--num_threads", default=int(cpu_count() / 1.5), required=False, type=int)
+parser.add_argument("--num_threads", default=cpu_count(), required=False, type=int)
+parser.add_argument("--sample_length", default=10, required=False, type=int)
 
 args = parser.parse_args()
 
@@ -37,43 +38,42 @@ args = parser.parse_args()
 def convert(genre):
     files = os.listdir(f"{SUB_FOLDER_PATH}genres/{genre}/")
 
-    if args.download in 'True':
-        args.download = True
-    else:
-        args.download = False
-
     # Create directories:
-    if not os.path.exists("data/fma/spectrograms/"):
-        os.mkdir("data/fma/spectrograms/")
     if not os.path.exists(f"data/fma/spectrograms/{genre}/"):
         os.mkdir(f"data/fma/spectrograms/{genre}/")
-
+    
     # Convert files to Mel Spectrograms:
     for file in tqdm(files, total=len(files), desc=f"{genre}", leave=False):
+        # Ignore invalid files in dataset:
         try:
             signal, sr = audiofile.read(f"{SUB_FOLDER_PATH}genres/{genre}/{file}")
+            signal = to_mono(signal)
+
+            if args.sample_length:
+                signal = signal[:args.sample_length * sr]
+
         except RuntimeError:
-            print("\nInvalid MP3 File\n")
-            continue
-        if sr != 44100:
             continue
 
         # Compute Mel Spectrogram:
-        signal = to_mono(signal)
         spectrogram = melspectrogram(
             y=np.array(signal), 
             sr=sr, 
             n_fft=args.n_fft, 
-            hop_length=args.hop_length, 
+            hop_length=int(len(signal) / args.length), 
             n_mels=args.n_mels,
             dtype=np.float32
             ).squeeze()
         
-        # Remove occasional extra dim:
-        if spectrogram.shape[-1] > args.length:
-            np.save(f'data/fma/spectrograms/{genre}/{file.split(".")[0]}.npy', spectrogram[:,args.length])
-
-        np.save(f'data/fma/spectrograms/{genre}/{file.split(".")[0]}.npy', spectrogram)
+        # Remove empty samples
+        if np.count_nonzero(spectrogram==0) >= args.n_mels * args.length:
+            continue
+        
+        # Account for different lengths:
+        if spectrogram.shape[-1] > args.length or spectrogram.shape[-1] < args.length:
+            np.save(f'data/fma/spectrograms/{genre}/{file.split(".")[0]}.npy', spectrogram[:,:args.length])
+        else:
+            np.save(f'data/fma/spectrograms/{genre}/{file.split(".")[0]}.npy', spectrogram)
 
 # Clean up genres column:
 def clean_genres(x):
@@ -95,6 +95,10 @@ def clean_names(x):
     return x
 
 def main():
+    if args.download in 'True':
+        args.download = True
+    else:
+        args.download = False
     # Prepare dataset:
     if args.download:
         # Create data folder:
@@ -208,10 +212,16 @@ def main():
     # Convert audio to spectrograms:
     print("INFO: Generating spectrograms")
 
+    if not os.path.exists("data/fma/spectrograms/"):
+        os.mkdir("data/fma/spectrograms/")
+
     pool = ThreadPool(int(args.num_threads))
     pool.map(convert, unique_genres)
 
     print("INFO: Processing complete")
+
+    if os.path.exists(MEMMAP_PATH):
+        os.remove(MEMMAP_PATH)
 
 if __name__ == "__main__":
     main()

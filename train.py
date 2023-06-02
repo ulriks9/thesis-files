@@ -17,13 +17,9 @@ parser = argparse.ArgumentParser(
 parser.add_argument('--wandb', required=False, type=str, default='True')
 parser.add_argument('--epochs', default=2000, required=False, type=int)
 parser.add_argument('--epochs_pred', default=5, required=False, type=int)
-parser.add_argument('--timesteps', default=4000, required=False, type=int)
+parser.add_argument('--timesteps', default=1000, required=False, type=int)
 parser.add_argument('--batch_size', default=32, required=False, type=int)
-parser.add_argument('--n_fft', default=4096, required=False, type=int)
-parser.add_argument('--n_mels', default=256, required=False, type=int)
-parser.add_argument('--hop_length', default=2585, required=False, type=int)
-parser.add_argument('--time_embedding_dim', default=256, required=False, type=int)
-parser.add_argument('--seq_length', default=512, required=False, type=int)
+parser.add_argument('--time_embedding_dim', default=64, required=False, type=int)
 parser.add_argument('--verbose', default='True', required=False, type=str)
 parser.add_argument('--optimizer', default="AdamW", required=False, type=str)
 parser.add_argument('--l_r', default=1e-4, required=False, type=float)
@@ -34,30 +30,39 @@ parser.add_argument('--dims', default="256,256,512,512,1024,1024", required=Fals
 parser.add_argument('--scheduler', default="ReduceLROnPlateau", required=False, type=str)
 parser.add_argument('--patience', default=10, required=False, type=int)
 parser.add_argument('--scheduler_threshold', default=1e-2, required=False, type=int)
+parser.add_argument('--scheduler_factor', default=0.1, required=False, type=float)
+parser.add_argument('--normalize', default='True', required=False, type=str)
+parser.add_argument('--device', default='cuda:0', required=False, type=str)
 
 def main():
-    device = "cuda:0"
     args = parser.parse_args()
-    args.dims = str(args.dims).split(',')
-    args.dims = [int(dim) for dim in args.dims]
-    dataset = FMA(workers=args.num_workers, sample_shape=(args.n_mels, args.seq_length))
-    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, pin_memory=True)
-    loss_fn = torch.nn.MSELoss()
-
-    # Argparse doesn't convert to bool:
+    # WandB config
     if args.wandb in 'True':
         WANDB = True
     else:
         WANDB = False
-    
+    # Verbose config
     if args.verbose in 'True':
         args.verbose = True
     else:
         args.verbose = False
+    # Standardize config
+    if args.normalize in 'True':
+        NORMALIZE = True
+    else:
+        NORMALIZE = False
+
+    device = args.device
+    args.dims = str(args.dims).split(',')
+    args.dims = [int(dim) for dim in args.dims]
+    dataset = FMA(workers=args.num_workers, normalize=NORMALIZE)
+    example = next(iter(dataset))
+    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, pin_memory=True)
+    loss_fn = torch.nn.MSELoss()
 
     model = UNet1D(
-        in_channels=args.n_mels,
-        out_channels=args.n_mels,
+        in_channels=example.shape[0],
+        out_channels=example.shape[0],
         dims=args.dims,
         time_embedding_dim=args.time_embedding_dim,
         device=device
@@ -66,7 +71,7 @@ def main():
     ddpm = DDPM(
         model,
         timesteps=args.timesteps,
-        input_shape=(args.n_mels, args.seq_length)
+        input_shape=(example.shape[0], example.shape[1])
     )
 
     if args.verbose:
@@ -86,7 +91,9 @@ def main():
     scheduler = ReduceLROnPlateau(
         optimizer, 
         patience=args.patience,
-        threshold=args.scheduler_threshold
+        threshold=args.scheduler_threshold,
+        factor=args.scheduler_factor,
+        cooldown=args.patience
         )
 
     if WANDB == True:
@@ -97,12 +104,11 @@ def main():
                 "Epochs": args.epochs,
                 "Timesteps": args.timesteps,
                 "Batch Size": args.batch_size,
-                "Number of FFTs": args.n_fft,
-                "Number of Mels": args.n_mels,
-                "Hop Length": args.hop_length,
+                "Number of Mels": example.shape[0],
                 "Optimizer": args.optimizer,
                 "Learning Rate": args.l_r,
-                "Patience": args.patience
+                "Patience": args.patience,
+                "Sequence Length": example.shape[1]
             }
         )
 
@@ -149,7 +155,7 @@ def main():
 
         if (epoch + 1) % args.epochs_pred == 0:
             ddpm.eval()
-            samples = ddpm.sample(1, args.n_mels, args.seq_length)
+            samples = ddpm.sample(1, example.shape[0], example.shape[1])
             sample = samples[-1].cpu().detach().numpy().squeeze()
 
             if WANDB == True:
